@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 210 64" role="img" aria-labelledby="title">
+  <title id="title">Noted</title>
+  <rect x="2" y="6" width="50" height="50" rx="15" fill="#37634d"/>
+  <path d="M17 20h20v25H17z" fill="none" stroke="#fff" stroke-linejoin="round" stroke-width="3"/>
+  <path d="M22 28h10M22 34h10M22 40h6" fill="none" stroke="#fff" stroke-linecap="round" stroke-width="2.5"/>
+  <text x="64" y="45" fill="#ffffff" font-family="Georgia, serif" font-size="38" font-weight="700">Noted</text>
+</svg>
