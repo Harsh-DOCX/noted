@@ -1,6 +1,6 @@
 const API_URL = process.env.REACT_APP_API_URL || 'http://localhost:5000';
 
-export async function apiRequest(path, { token, ...options } = {}) {
+export async function apiRequest(path, { token, responseType = 'json', ...options } = {}) {
   const response = await fetch(`${API_URL}${path}`, {
     ...options,
     headers: {
@@ -9,13 +9,13 @@ export async function apiRequest(path, { token, ...options } = {}) {
       ...options.headers,
     },
   });
-  const result = await response.json();
 
   if (!response.ok) {
+    const result = await response.json();
     const error = new Error(result.message || 'The request could not be completed.');
     error.status = response.status;
     throw error;
   }
 
-  return result;
+  return responseType === 'blob' ? response.blob() : response.json();
 }

@@ -3,6 +3,7 @@ const mongoose = require("mongoose");
 const Notes = require("../model/Notes");
 const User = require("../model/userSchema");
 const requireAuth = require("../middleware/requireAuth");
+const { isAdmin } = require("../utils/admin");
 
 const router = express.Router();
 const authorFields = "username fullName";
@@ -30,7 +31,9 @@ router.post("/upload", requireAuth, async (req, res) => {
             title: title.trim(),
         });
         await note.populate("uploadedBy", authorFields);
-        return res.status(201).json(note);
+        const noteData = note.toObject();
+        delete noteData.document;
+        return res.status(201).json(noteData);
     } catch (error) {
         if (error.name === "ValidationError") {
             return res.status(400).json({ message: "Note details are invalid" });
@@ -42,7 +45,10 @@ router.post("/upload", requireAuth, async (req, res) => {
 
 router.get("/get-notes", requireAuth, async (req, res) => {
     try {
-        const notes = await Notes.find().sort({ createdAt: -1 }).populate("uploadedBy", authorFields);
+        const notes = await Notes.find()
+            .select("-document")
+            .sort({ createdAt: -1 })
+            .populate("uploadedBy", authorFields);
         return res.status(200).json(notes);
     } catch (error) {
         console.error("Error fetching notes:", error);
@@ -58,6 +64,7 @@ router.get("/get-notes/:userId", requireAuth, async (req, res) => {
 
     try {
         const notes = await Notes.find({ uploadedBy: userId })
+            .select("-document")
             .sort({ createdAt: -1 })
             .populate("uploadedBy", authorFields);
         return res.status(200).json(notes);
@@ -67,81 +74,30 @@ router.get("/get-notes/:userId", requireAuth, async (req, res) => {
     }
 });
 
-router.get("/get-note/search/:searchTerm", requireAuth, async (req, res) => {
-    const searchTerm = req.params.searchTerm.trim();
-    if (!searchTerm || searchTerm.length > 100) {
-        return res.status(400).json({ message: "Search term must be between 1 and 100 characters" });
-    }
-
-    try {
-        const query = escapeRegex(searchTerm);
-        const matchingUsers = await User.find({
-            $or: [
-                { username: { $regex: query, $options: "i" } },
-                { fullName: { $regex: query, $options: "i" } },
-            ],
-        }).select("_id");
-        const notes = await Notes.find({
-            $or: [
-                { title: { $regex: query, $options: "i" } },
-                { uploadedBy: { $in: matchingUsers.map((user) => user._id) } },
-            ],
-        }).sort({ createdAt: -1 }).populate("uploadedBy", authorFields);
-        return res.status(200).json(notes);
-    } catch (error) {
-        console.error("Error searching notes:", error);
-        return res.status(500).json({ message: "Unable to search notes" });
-    }
-});
-
-router.get("/:noteId", requireAuth, async (req, res) => {
+router.get("/:noteId/document", requireAuth, async (req, res) => {
     if (!mongoose.isValidObjectId(req.params.noteId)) {
         return res.status(400).json({ message: "Invalid note ID" });
     }
 
     try {
-        const note = await Notes.findById(req.params.noteId).populate("uploadedBy", authorFields);
+        const note = await Notes.findById(req.params.noteId).select("document");
         if (!note) {
             return res.status(404).json({ message: "Note not found" });
         }
-        return res.status(200).json(note);
-    } catch (error) {
-        console.error("Error fetching note:", error);
-        return res.status(500).json({ message: "Unable to fetch note" });
-    }
-});
 
-router.patch("/:noteId", requireAuth, async (req, res) => {
-    if (!mongoose.isValidObjectId(req.params.noteId)) {
-        return res.status(400).json({ message: "Invalid note ID" });
-    }
-
-    const { title, document } = req.body || {};
-    if (
-        (title === undefined && document === undefined)
-        || (title !== undefined && typeof title !== "string")
-        || (document !== undefined && !isPdfDocument(document))
-    ) {
-        return res.status(400).json({ message: "Provide a valid title or document to update" });
-    }
-
-    const updates = {};
-    if (title !== undefined) updates.title = title.trim();
-    if (document !== undefined) updates.document = document.trim();
-
-    try {
-        const note = await Notes.findOneAndUpdate(
-            { _id: req.params.noteId, uploadedBy: req.userId },
-            { $set: updates },
-            { new: true, runValidators: true },
-        ).populate("uploadedBy", authorFields);
-        if (!note) {
-            return res.status(404).json({ message: "Note not found or not owned by this user" });
+        const match = /^data:application\/pdf;base64,([A-Za-z0-9+/]+={0,2})$/.exec(note.document);
+        if (!match) {
+            return res.status(500).json({ message: "The stored PDF is invalid" });
         }
-        return res.status(200).json(note);
+
+        return res
+            .type("application/pdf")
+            .set("Content-Disposition", `inline; filename="note-${note.id}.pdf"`)
+            .set("Cache-Control", "private, no-store")
+            .send(Buffer.from(match[1], "base64"));
     } catch (error) {
-        console.error("Error updating note:", error);
-        return res.status(500).json({ message: "Unable to update note" });
+        console.error("Error fetching note document:", error);
+        return res.status(500).json({ message: "Unable to fetch note document" });
     }
 });
 
@@ -151,12 +107,19 @@ router.delete("/:noteId", requireAuth, async (req, res) => {
     }
 
     try {
-        const note = await Notes.findOneAndDelete({
-            _id: req.params.noteId,
-            uploadedBy: req.userId,
-        });
+        const user = await User.findById(req.userId).select("email googleId");
+        if (!user) {
+            return res.status(401).json({ message: "Authenticated user not found" });
+        }
+
+        const filter = { _id: req.params.noteId };
+        if (!isAdmin(user)) {
+            filter.uploadedBy = req.userId;
+        }
+
+        const note = await Notes.findOneAndDelete(filter);
         if (!note) {
-            return res.status(404).json({ message: "Note not found or not owned by this user" });
+            return res.status(404).json({ message: "Note not found" });
         }
         return res.status(200).json({ message: "Note deleted successfully" });
     } catch (error) {
